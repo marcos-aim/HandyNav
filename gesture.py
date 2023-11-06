@@ -1,75 +1,89 @@
-import json
-import pandas as pd
+import cv2
+import mediapipe as mp
+import os
+import pyautogui
+import time
+import webbrowser  
+
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+hands = mp_hands.Hands(
+    min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
 
-class Gesture:
-    fingers: list
-    shape: str
-    movement: list
-    action: list
+# Function to count fingers based on landmarks.
+def count_fingers(image, hand_landmarks, hand_no=0):
+    # Assuming the hand is right, these landmarks correspond to fingertips.
+    tip_ids = [4, 8, 12, 16, 20]
+    fingers = []
 
-    def __init__(self, fingers, shape, movement, action):
-        self.fingers = fingers
-        self.shape = shape
-        self.movement = movement
-        self.action = action
-
-    def __str__(self):
-        return (f"Lifted Fingers: {self.fingers},"
-                f" Shape: {self.shape},"
-                f" Movement Bounds: {self.movement},"
-                f" Action: {self.action}")
-
-    def to_json(self):
-        # Convert the Gesture instance to a dictionary
-        gesture_dict = {
-            "fingers": self.fingers,
-            "shape": self.shape,
-            "movement": self.movement,
-            "action": self.action
-        }
-        # Convert the dictionary to a JSON string
-        return json.dumps(gesture_dict)
-
-
-class InputGesture(Gesture):
-
-    def __init__(self, fingers, shape, movement):
-        super().__init__(fingers, shape, movement, action=[])
-
-    def __str__(self):
-        return (f"Lifted Fingers: {self.fingers},"
-                f" Shape: {self.shape},"
-                f" Movement Bounds: {self.movement}")
-
-
-def json_to_dataframe(json_data):
-    gestures = []
-    for gesture_json in json_data:
-        gesture_dict = json.loads(gesture_json)
-        # Ensure that 'action' is a list
-        if not isinstance(gesture_dict['action'], list):
-            gesture_dict['action'] = [gesture_dict['action']]
-        gesture = Gesture(gesture_dict['fingers'], gesture_dict['shape'], gesture_dict['movement'],
-                          gesture_dict['action'])
-        gestures.append(gesture)
-
-    # Create a DataFrame from the list of gestures
-    df = pd.DataFrame([vars(gesture) for gesture in gestures])
-
-    return df
-
-
-def find_matching_action(input_gesture, gestures_df):
-    # Check if there are any matching gestures in the DataFrame
-    matching_gestures = gestures_df[
-        (gestures_df['fingers'] == input_gesture.fingers) &
-        (gestures_df['shape'] == input_gesture.shape)
-        ]
-
-    if not matching_gestures.empty:
-        # If there are matching gestures, return the action from the first one
-        return matching_gestures.iloc[0]['action']
+    # Thumb
+    if hand_landmarks.landmark[tip_ids[0]].x < hand_landmarks.landmark[tip_ids[0] - 1].x:
+        fingers.append(1)
     else:
-        # If no matching gestures are found, return an error code
-        return "No matching gesture found"
+        fingers.append(0)
+
+    # 4 Fingers
+    for id in range(1, 5):
+        if hand_landmarks.landmark[tip_ids[id]].y < hand_landmarks.landmark[tip_ids[id] - 2].y:
+            fingers.append(1)
+        else:
+            fingers.append(0)
+
+    return fingers.count(1)
+
+
+cap = cv2.VideoCapture(0)
+twoFingers = False
+g1 = 0.5
+oneFingerStartX = 0.5
+oneFingerStartY = 0.5
+while cap.isOpened():
+    success, image = cap.read()
+    if not success:
+        print("Ignoring empty camera frame.")
+        continue
+
+    # Flip the image horizontally for a later selfie-view display.
+    # Convert the BGR image to RGB.
+    image = cv2.cvtColor(cv2.flip(image, 1), cv2.COLOR_BGR2RGB)
+    image.flags.writeable = False
+
+    # Process the image and detect hands.
+    results = hands.process(image)
+
+    # Draw the hand annotations on the image.
+    image.flags.writeable = True
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(
+                image, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+            # Count fingers and display the count.
+            finger_count = count_fingers(image, hand_landmarks)
+            cv2.putText(image, f'Fingers: {finger_count}', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+            
+            #Jedi gestures
+            twoFingers = (finger_count == 2) 
+            if not twoFingers:
+                g1 = hand_landmarks.landmark[12].x
+                
+            if twoFingers and hand_landmarks.landmark[12].x - g1 > .1:
+                webbrowser.open('https://www.chess.com/home')
+                time.sleep(5)
+            #if twoFingers and g1 - hand_landmarks.landmark[12].x > .1:
+                #pyautogui.hotkey('command', 'n', interval=0.25)                   
+            
+    # Display the resulting image.
+    #cv2.imshow('MediaPipe Hands', image)
+
+    # Break the loop when 'q' is pressed.
+    if cv2.waitKey(5) & 0xFF == ord('q'):
+        break
+        
+
+
+# Release the webcam and destroy all OpenCV windows.
+cap.release()
+cv2.destroyAllWindows()
